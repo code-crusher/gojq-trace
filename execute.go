@@ -19,11 +19,24 @@ func (env *env) execute(bc *Code, v any, vars ...any) Iter {
 	return env
 }
 
-func (env *env) Next() (any, bool) {
+func (env *env) Next() (v any, ok bool) {
 	var err error
 	pc, callpc, index := env.pc, len(env.codes)-1, -1
 	backtrack, hasCtx := env.backtrack, env.ctx != context.Background()
-	defer func() { env.pc, env.backtrack = pc, true }()
+	defer func() {
+		// A few value operations recurse in Go outside the opcode loop and
+		// panic with *allocLimitError when they get too deep or too large
+		// (compare over a deeply nested value, for one). Recover it here so it
+		// surfaces as a typed error value instead of escaping the run.
+		if r := recover(); r != nil {
+			if _, isAlloc := r.(*allocLimitError); !isAlloc {
+				panic(r)
+			}
+			pc, env.forks = len(env.codes), nil
+			v, ok = r, true
+		}
+		env.pc, env.backtrack = pc, true
+	}()
 loop:
 	for ; pc < len(env.codes); pc++ {
 		env.debugState(pc, backtrack)
@@ -35,6 +48,10 @@ loop:
 				return env.ctx.Err(), true
 			default:
 			}
+		}
+		if MaxAlloc > 0 && env.overStackLimit() {
+			pc, env.forks = len(env.codes), nil
+			return &allocLimitError{}, true
 		}
 		switch code.op {
 		case opnop:
@@ -72,9 +89,26 @@ loop:
 				}
 			}
 			env.push(m)
+			if env.charge(m) {
+				err = &allocLimitError{}
+				break loop
+			}
 		case opappend:
 			i := env.index(code.v.([2]int))
-			env.values[i] = append(env.values[i].([]any), env.pop())
+			x := env.pop()
+			xs := env.values[i].([]any)
+			// append can hold both old and new 16-byte-slot backing arrays
+			// during geometric growth. Bound that peak before it can build a
+			// large array whose transient footprint already exceeds the limit.
+			if arrayAppendTooLarge(len(xs) + 1) {
+				err = &allocLimitError{}
+				break loop
+			}
+			if env.chargeBytes(16 + allocSize(x)) {
+				err = &allocLimitError{}
+				break loop
+			}
+			env.values[i] = append(xs, x)
 		case opfork:
 			if backtrack {
 				if err != nil {
@@ -190,6 +224,33 @@ loop:
 					break loop
 				}
 				env.push(w)
+				exceeded := false
+				if MaxAlloc > 0 {
+					switch w.(type) {
+					case nil, bool, int, float64:
+						// The scalar hot path allocates nothing. Keep only the
+						// monotonic-budget check needed after a caught limit error.
+						exceeded = env.alloc > MaxAlloc
+					default:
+						n := allocSize(w)
+						exceeded = env.alloc > MaxAlloc
+						if n > 0 {
+							name, _ := v[2].(string)
+							if name != "input" && name != "inputs" {
+								switch w.(type) {
+								case []any, map[string]any:
+									exceeded = env.chargeFreshResult(w, x, args)
+								default:
+									exceeded = env.chargeBytes(n)
+								}
+							}
+						}
+					}
+				}
+				if exceeded {
+					err = &allocLimitError{}
+					break loop
+				}
 				if !env.paths.empty() && env.expdepth == 0 {
 					switch v[2].(string) {
 					case "_index":
@@ -279,6 +340,14 @@ loop:
 				if len(v) == 0 {
 					break loop
 				}
+				// .[] materializes a []pathValue of every element (32 bytes each)
+				// to drive the iteration. Charge it to the run meter so nested
+				// and looped iteration of the same large array accumulates and
+				// trips instead of stacking these uncharged.
+				if env.chargeBytes(int64(len(v)) * 32) {
+					err = &allocLimitError{}
+					break loop
+				}
 				xs = make([]pathValue, len(v))
 				for i, v := range v {
 					xs[i] = pathValue{path: i, value: v}
@@ -290,6 +359,10 @@ loop:
 					break loop
 				}
 				if len(v) == 0 {
+					break loop
+				}
+				if env.chargeBytes(int64(len(v)) * 32) {
+					err = &allocLimitError{}
 					break loop
 				}
 				xs = make([]pathValue, len(v))
@@ -308,6 +381,28 @@ loop:
 					env.pop()
 					if e, ok := w.(error); ok {
 						err = e
+						break loop
+					}
+					exceeded := false
+					if MaxAlloc > 0 {
+						switch w.(type) {
+						case nil, bool, int, float64:
+							exceeded = env.alloc > MaxAlloc
+						default:
+							n := allocSize(w)
+							exceeded = env.alloc > MaxAlloc
+							if n > 0 {
+								switch w.(type) {
+								case []any, map[string]any:
+									exceeded = env.chargeFreshResult(w, nil, nil)
+								default:
+									exceeded = env.chargeBytes(n)
+								}
+							}
+						}
+					}
+					if exceeded {
+						err = &allocLimitError{}
 						break loop
 					}
 					env.push(w)
@@ -345,7 +440,12 @@ loop:
 				err = &invalidPathError{v}
 				break loop
 			}
-			env.push(env.poppaths())
+			paths := env.poppaths()
+			if env.charge(paths) {
+				err = &allocLimitError{}
+				break loop
+			}
+			env.push(paths)
 			env.expdepth = env.paths.pop().value.(int)
 		default:
 			panic(code.op)

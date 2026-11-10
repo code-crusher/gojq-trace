@@ -351,18 +351,23 @@ func keys(v map[string]any) []string {
 	return w
 }
 
-func values(v any) ([]any, bool) {
+var errNotIterable = errors.New("not iterable")
+
+func values(v any) ([]any, error) {
 	switch v := v.(type) {
 	case []any:
-		return v, true
+		return v, nil
 	case map[string]any:
+		if arrayTooLarge(len(v)) {
+			return nil, &allocLimitError{}
+		}
 		vs := make([]any, len(v))
 		for i, k := range keys(v) {
 			vs[i] = v[k]
 		}
-		return vs, true
+		return vs, nil
 	default:
-		return nil, false
+		return nil, errNotIterable
 	}
 }
 
