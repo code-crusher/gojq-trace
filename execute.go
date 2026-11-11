@@ -124,7 +124,9 @@ loop:
 				case *tryEndError:
 					err = e.err
 					break loop
-				case nil, *breakError, *HaltError:
+				case nil, *breakError, *HaltError, *allocLimitError:
+					// An allocation limit error is not catchable; it terminates
+					// the run instead of being turned into a catchable value.
 					break loop
 				case ValueError:
 					env.pop()
@@ -150,7 +152,9 @@ loop:
 		case opforkalt:
 			if backtrack {
 				switch err.(type) {
-				case nil, *breakError, *HaltError:
+				case nil, *breakError, *HaltError, *allocLimitError:
+					// The allocation limit error is not an alternative to fall
+					// back from; propagate it instead of swallowing it.
 					break loop
 				}
 				pc, backtrack, err = code.v.(int), false, nil
@@ -450,6 +454,14 @@ loop:
 		default:
 			panic(code.op)
 		}
+	}
+	if _, isAlloc := err.(*allocLimitError); isAlloc {
+		// The allocation budget is spent for the rest of the run, so stop
+		// instead of backtracking into forks that would build the value the
+		// meter just rejected. The error is not catchable by try-catch, and
+		// this also keeps a partial result from being emitted afterwards.
+		pc, env.forks = len(env.codes), nil
+		return err, true
 	}
 	if len(env.forks) > 0 {
 		pc, backtrack = env.popfork(), true

@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"math"
 	"math/big"
-	"strconv"
 	"strings"
 )
 
@@ -75,25 +74,42 @@ func bigToFloat(x *big.Int) float64 {
 	if x.IsInt64() {
 		return float64(x.Int64())
 	}
-	if f, err := strconv.ParseFloat(x.String(), 64); err == nil {
-		return f
-	}
-	return math.Inf(x.Sign())
+	// Convert through big.Float (a binary copy) rather than x.String(), whose
+	// base-10 conversion allocates large superlinear scratch inside math/big: a
+	// 10 MB integer divided by a small number reached ~300 MB, none of it seen
+	// by the value meter. Float64 already yields +/-Inf on overflow.
+	f, _ := new(big.Float).SetPrec(53).SetInt(x).Float64()
+	return f
 }
 
 func parseNumber(v json.Number) any {
-	if i, err := v.Int64(); err == nil && math.MinInt <= i && i <= math.MaxInt {
-		return int(i)
+	s := v.String()
+	if len(s) <= 20 {
+		if i, err := v.Int64(); err == nil && math.MinInt <= i && i <= math.MaxInt {
+			return int(i)
+		}
 	}
-	if strings.ContainsAny(v.String(), ".eE") {
+	// Decimal conversion uses superlinear scratch inside math/big. Mirror the
+	// encoder's 384-bytes-per-word safety factor in the reverse direction and
+	// reject by O(1) digit count before SetString starts work. Counting a sign
+	// or decimal syntax byte as a digit is deliberately conservative for
+	// absurdly large numbers and avoids a linear pre-scan on the attack path.
+	if MaxAlloc > 0 && len(s) > 20 {
+		digits := int64(len(s))
+		words := (digits + 18) / 19 // at most 19 decimal digits per 64-bit word
+		if words > MaxAlloc/384 {
+			panic(&allocLimitError{})
+		}
+	}
+	if strings.ContainsAny(s, ".eE") {
 		if f, err := v.Float64(); err == nil {
 			return f
 		}
 	}
-	if bi, ok := new(big.Int).SetString(v.String(), 10); ok {
+	if bi, ok := new(big.Int).SetString(s, 10); ok {
 		return bi
 	}
-	if strings.HasPrefix(v.String(), "-") {
+	if strings.HasPrefix(s, "-") {
 		return math.Inf(-1)
 	}
 	return math.Inf(1)

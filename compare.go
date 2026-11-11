@@ -48,6 +48,12 @@ func compareDepth(l, r any, depth int) int {
 		},
 		func(l, r map[string]any) int {
 			lk, rk := funcKeys(l), funcKeys(r)
+			if _, ok := lk.(*allocLimitError); ok {
+				panic(lk)
+			}
+			if _, ok := rk.(*allocLimitError); ok {
+				panic(rk)
+			}
 			if cmp := compareDepth(lk, rk, depth+1); cmp != 0 {
 				return cmp
 			}

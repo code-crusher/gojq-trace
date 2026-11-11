@@ -12,7 +12,8 @@ import (
 // per run, so concurrent runs are bounded independently.
 //
 // When a run exceeds the budget it stops with an "allocation limit exceeded"
-// error value, just like any other runtime error. A run may still hold a value
+// error value, just like any other runtime error, except that it is not
+// catchable by try-catch and terminates the run. A run may still hold a value
 // provided by the caller, such as the input document, without it counting
 // against the budget.
 var MaxAlloc int64

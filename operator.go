@@ -315,13 +315,23 @@ func funcOpAdd(_, l, r any) any {
 		},
 		func(l, r float64) any { return l + r },
 		func(l, r *big.Int) any { return new(big.Int).Add(l, r) },
-		func(l, r string) any { return l + r },
+		func(l, r string) any {
+			// Concatenating caller-provided strings (which are not charged) can
+			// still allocate a large result; bound it before the copy.
+			if MaxAlloc > 0 && int64(len(l)+len(r)) > MaxAlloc {
+				return &allocLimitError{}
+			}
+			return l + r
+		},
 		func(l, r []any) any {
 			if len(l) == 0 {
 				return r
 			}
 			if len(r) == 0 {
 				return l
+			}
+			if arrayTooLarge(len(l) + len(r)) {
+				return &allocLimitError{}
 			}
 			v := make([]any, len(l)+len(r))
 			copy(v, l)
@@ -334,6 +344,9 @@ func funcOpAdd(_, l, r any) any {
 			}
 			if len(r) == 0 {
 				return l
+			}
+			if MaxAlloc > 0 && int64(len(l)+len(r))*24 > MaxAlloc {
+				return &allocLimitError{}
 			}
 			m := make(map[string]any, len(l)+len(r))
 			maps.Copy(m, l)
@@ -365,6 +378,9 @@ func funcOpSub(_, l, r any) any {
 		func(l, r *big.Int) any { return new(big.Int).Sub(l, r) },
 		func(l, r string) any { return &binopTypeError{"subtract", l, r} },
 		func(l, r []any) any {
+			if arrayTooLarge(len(l)) {
+				return &allocLimitError{}
+			}
 			v := make([]any, 0, len(l))
 		L:
 			for _, l := range l {
@@ -395,7 +411,12 @@ func funcOpMul(_, l, r any) any {
 			return x.Mul(x, y)
 		},
 		func(l, r float64) any { return l * r },
-		func(l, r *big.Int) any { return new(big.Int).Mul(l, r) },
+		func(l, r *big.Int) any {
+			if MaxAlloc > 0 && int64(l.BitLen()+r.BitLen())/8 > MaxAlloc {
+				return &allocLimitError{}
+			}
+			return new(big.Int).Mul(l, r)
+		},
 		func(l, r string) any { return &binopTypeError{"multiply", l, r} },
 		func(l, r []any) any { return &binopTypeError{"multiply", l, r} },
 		deepMergeObjects,
@@ -416,13 +437,28 @@ func funcOpMul(_, l, r any) any {
 }
 
 func deepMergeObjects(l, r map[string]any) any {
+	var size int64
+	return deepMergeObjectsLimited(l, r, &size, 0)
+}
+
+func deepMergeObjectsLimited(l, r map[string]any, size *int64, depth int) any {
+	if MaxAlloc > 0 && depth > maxRecursionDepth {
+		return &allocLimitError{}
+	}
+	if *size += int64(len(l)+len(r)) * 24; MaxAlloc > 0 && *size > MaxAlloc {
+		return &allocLimitError{}
+	}
 	m := make(map[string]any, len(l)+len(r))
 	maps.Copy(m, l)
 	for k, v := range r {
 		if mk, ok := m[k]; ok {
 			if mk, ok := mk.(map[string]any); ok {
 				if w, ok := v.(map[string]any); ok {
-					v = deepMergeObjects(mk, w)
+					merged := deepMergeObjectsLimited(mk, w, size, depth+1)
+					if _, ok := merged.(*allocLimitError); ok {
+						return merged
+					}
+					v = merged
 				}
 			}
 		}
@@ -436,6 +472,9 @@ func repeatString(s string, n float64) any {
 		return nil
 	}
 	c := int(min(n, math.MaxInt32))
+	if MaxAlloc > 0 && int64(len(s))*int64(c) > MaxAlloc {
+		return &allocLimitError{}
+	}
 	if uint64(len(s))*uint64(c) >= math.MaxInt32 {
 		return &repeatStringTooLargeError{s, n}
 	}
@@ -473,7 +512,15 @@ func funcOpDiv(_, l, r any) any {
 			}
 			return bigToFloat(l) / bigToFloat(r)
 		},
-		func(l, r string) any { return splitString(l, r) },
+		func(l, r string) any {
+			if l == "" {
+				return []any{}
+			}
+			if arrayTooLarge(strings.Count(l, r) + 1) {
+				return &allocLimitError{}
+			}
+			return splitString(l, r)
+		},
 		func(l, r []any) any { return &binopTypeError{"divide", l, r} },
 		func(l, r map[string]any) any { return &binopTypeError{"divide", l, r} },
 		func(l, r any) any { return &binopTypeError{"divide", l, r} },
