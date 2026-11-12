@@ -151,6 +151,17 @@ func main() {
       Technically speaking, we can fix the iterator to terminate on the halting error, but it does not terminate at the moment.
       The `halt` function in jq not only stops the iteration, but also terminates the command execution, even if there are still input values.
       So, gojq leaves it up to the library user how to handle the halting error.
+  - Alternatively, you can iterate the results using `for` ... `range` with [`gojq.ToSeq2`](https://pkg.go.dev/github.com/itchyny/gojq#ToSeq2), which returns an [`iter.Seq2[any, error]`](https://pkg.go.dev/iter#Seq2) yielding each result with a nil error, and errors yielded by the iterator with a nil value. It stops the iteration on a `gojq.HaltError` with a nil value. Use [`gojq.ToSeq`](https://pkg.go.dev/github.com/itchyny/gojq#ToSeq) to get an [`iter.Seq[any]`](https://pkg.go.dev/iter#Seq) yielding errors as values.
+
+    ```go
+    for v, err := range gojq.ToSeq2(query.Run(input)) {
+        if err != nil {
+            log.Fatalln(err)
+        }
+        fmt.Printf("%#v\n", v)
+    }
+    ```
+
   - Note that the result iterator may emit infinite number of values; `repeat(0)` and `range(infinite)`. It may stuck with no output value; `def f: f; f`. Use `RunWithContext` when you want to limit the execution time.
 
 [`gojq.Compile`](https://pkg.go.dev/github.com/itchyny/gojq#Compile) allows to configure the following compiler options.
