@@ -75,3 +75,28 @@ func typeIndex(v any) int {
 		return 6
 	}
 }
+
+// cloneConst clones the constant value embedded in the bytecode so that
+// mutable objects (arrays and objects) are never shared between multiple
+// executions of a compiled query. Constant values are created at compile
+// time, but their copies are given to the virtual machine at execution time,
+// otherwise the values returned by Run could be mutated by the user and
+// affect the following executions (issue #235).
+func cloneConst(v any) any {
+	switch v := v.(type) {
+	case []any:
+		w := make([]any, len(v))
+		for i, x := range v {
+			w[i] = cloneConst(x)
+		}
+		return w
+	case map[string]any:
+		w := make(map[string]any, len(v))
+		for k, x := range v {
+			w[k] = cloneConst(x)
+		}
+		return w
+	default:
+		return v
+	}
+}

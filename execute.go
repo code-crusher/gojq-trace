@@ -49,7 +49,7 @@ loop:
 			env.push(v)
 		case opconst:
 			env.pop()
-			env.push(code.v)
+			env.push(cloneConst(code.v))
 		case opload:
 			env.push(env.values[env.index(code.v.([2]int))])
 		case opstore:

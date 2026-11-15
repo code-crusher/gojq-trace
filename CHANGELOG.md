@@ -1,4 +1,8 @@
 # Changelog
+## Unreleased
+* fix constant object and array literals to be cloned for each execution
+  so that mutating the output of `Run` does not affect the following runs
+
 ## [v0.12.20](https://github.com/itchyny/gojq/compare/v0.12.19..v0.12.20) (2026-11-01)
 * implement `gojq.ToInt` and `gojq.ToFloat64` for converting number values
 * fix destructuring alternative operator (`?//`) to reset variables of

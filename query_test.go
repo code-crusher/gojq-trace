@@ -415,6 +415,64 @@ func TestQueryRun_Race(t *testing.T) {
 	wg.Wait()
 }
 
+func TestQueryRun_ConstantMutation(t *testing.T) {
+	// Constant objects and arrays are embedded in the bytecode at compile
+	// time; Run must not hand out the shared values, otherwise mutating the
+	// output affects the following executions (issue #235).
+	for _, tc := range []struct {
+		src      string
+		expected any
+	}{
+		{`{"a": 1, "b": [2]}`, map[string]any{"a": 1, "b": []any{2}}},
+		{`[{"k": 1}, {"k": 2}]`, []any{map[string]any{"k": 1}, map[string]any{"k": 2}}},
+		{`{"a": {"b": {"c": [1, 2]}}}`, map[string]any{"a": map[string]any{"b": map[string]any{"c": []any{1, 2}}}}},
+	} {
+		query, err := gojq.Parse(tc.src)
+		if err != nil {
+			t.Fatal(err)
+		}
+		code, err := gojq.Compile(query)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for range 2 {
+			// Mutate every reachable container in the output deeply,
+			// then check the next execution is not affected.
+			var mutate func(v any)
+			mutate = func(v any) {
+				switch v := v.(type) {
+				case []any:
+					for _, v := range v {
+						mutate(v)
+					}
+					if len(v) > 0 {
+						v[0] = "changed"
+					}
+				case map[string]any:
+					for _, v := range v {
+						mutate(v)
+					}
+					v["extra"] = "changed"
+				}
+			}
+			iter := code.Run(nil)
+			got, ok := iter.Next()
+			if !ok {
+				t.Fatalf("no output for %q", tc.src)
+			}
+			mutate(got)
+			iter = code.Run(nil)
+			got, ok = iter.Next()
+			if !ok {
+				t.Fatalf("no output for %q", tc.src)
+			}
+			if !reflect.DeepEqual(got, tc.expected) {
+				t.Errorf("expected: %v, got: %v", tc.expected, got)
+			}
+		}
+	}
+}
+
 func TestQueryString(t *testing.T) {
 	cnt, err := os.ReadFile("builtin.jq")
 	if err != nil {
