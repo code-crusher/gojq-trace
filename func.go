@@ -85,7 +85,7 @@ func init() {
 		"ascii_upcase":   argFunc0(funcASCIIUpcase),
 		"tojson":         argFunc0(funcToJSON),
 		"fromjson":       argFunc0(funcFromJSON),
-		"format":         argFunc1(funcFormat),
+		"format":         argFunc1(nil),
 		"_tohtml":        argFunc0(funcToHTML),
 		"_touri":         argFunc0(funcToURI),
 		"_tourid":        argFunc0(funcToURId),
@@ -838,10 +838,13 @@ func funcFromJSON(v any) any {
 	return w
 }
 
-func funcFormat(v, x any) any {
+func funcFormat(v, x any, customFormats map[string]func(any) string) any {
 	s, ok := x.(string)
 	if !ok {
 		return &func0TypeError{"format", x}
+	}
+	if f, ok := customFormats[s]; ok {
+		return f(v)
 	}
 	format := "@" + s
 	f := formatToFunc(format)

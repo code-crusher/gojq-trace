@@ -44,6 +44,28 @@ func WithFunction(name string, minarity, maxarity int, f func(any, []any) any) C
 	return withFunction(name, minarity, maxarity, false, f)
 }
 
+// WithEscaper is a compiler option for adding a custom format string escaper.
+// The escaper is used by the format string `@name` and the format function
+// for the given name, which must be a non-empty string consisting of letters,
+// digits, and underscores, otherwise this function panics. The escaper can
+// also override the built-in format strings like `@base64`.
+func WithEscaper(name string, f func(any) string) CompilerOption {
+	if name == "" {
+		panic("invalid name for escaper: \"\"")
+	}
+	for i := 0; i < len(name); i++ {
+		if !isIdent(name[i], true) {
+			panic(fmt.Sprintf("invalid name for escaper: %q", name))
+		}
+	}
+	return func(c *compiler) {
+		if c.customFormats == nil {
+			c.customFormats = make(map[string]func(any) string)
+		}
+		c.customFormats[name] = f
+	}
+}
+
 // WithIterFunction is a compiler option for adding a custom iterator function.
 // This is like the [WithFunction] option, but you can add a function which
 // returns an Iter to emit multiple values. You cannot define both iterator and

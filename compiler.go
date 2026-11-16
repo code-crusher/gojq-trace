@@ -16,6 +16,7 @@ type compiler struct {
 	environLoader func() []string
 	variables     []string
 	customFuncs   map[string]function
+	customFormats map[string]func(any) string
 	inputIter     Iter
 	inputMu       sync.Mutex
 	codes         []*code
@@ -1034,6 +1035,13 @@ func (c *compiler) compileFunc(e *Func) error {
 				true,
 				-1,
 			)
+		case "format":
+			return c.compileCallInternal(
+				[3]any{c.funcFormat, len(e.Args), e.Name},
+				e.Args,
+				true,
+				-1,
+			)
 		default:
 			return c.compileCall(e.Name, e.Args)
 		}
@@ -1318,6 +1326,10 @@ func (c *compiler) funcMatch(v any, args []any) any {
 	return funcMatch(v, args[0], args[1], args[2], &c.regexpCache)
 }
 
+func (c *compiler) funcFormat(v any, args []any) any {
+	return funcFormat(v, args[0], c.customFormats)
+}
+
 func (c *compiler) compileObject(e *Object) error {
 	c.appendCodeInfo(e)
 	if len(e.KeyVals) == 0 {
@@ -1476,7 +1488,7 @@ func (c *compiler) compileUnary(e *Unary) error {
 
 func (c *compiler) compileFormat(format string, str *String) error {
 	f := formatToFunc(format)
-	if f == nil {
+	if f == nil || c.customFormats[format[1:]] != nil {
 		f = &Func{
 			Name: "format",
 			Args: []*Query{{Term: &Term{Type: TermTypeString, Str: &String{Str: format[1:]}}}},
