@@ -1,4 +1,8 @@
 # Changelog
+## Unreleased
+* fix `input` and `inputs` functions to continue reading the input after a
+  caught JSON parse error, resuming at the next line (fix #264)
+
 ## [v0.12.20](https://github.com/itchyny/gojq/compare/v0.12.19..v0.12.20) (2026-11-01)
 * implement `gojq.ToInt` and `gojq.ToFloat64` for converting number values
 * fix destructuring alternative operator (`?//`) to reset variables of
